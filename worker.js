@@ -1,32 +1,19 @@
 import Queue from 'bull';
-import { ObjectId } from 'mongodb';
 import { promises as fsPromises } from 'fs';
+import { ObjectId } from 'mongodb';
 import fileUtils from './utils/file';
-import userUtils from './utils/user';
 import basicUtils from './utils/basic';
-
-const imageThumbnail = require('image-thumbnail');
+import imageThumbnail from 'image-thumbnail';
 
 const fileQueue = new Queue('fileQueue');
 const userQueue = new Queue('userQueue');
 
+// File processing worker
 fileQueue.process(async (job) => {
   const { fileId, userId } = job.data;
 
-  // Delete bull keys in redis
-  //   redis-cli keys "bull*" | xargs redis-cli del
-
-  if (!userId) {
-    console.log('Missing userId');
-    throw new Error('Missing userId');
-  }
-
-  if (!fileId) {
-    console.log('Missing fileId');
-    throw new Error('Missing fileId');
-  }
-
-  if (!basicUtils.isValidId(fileId) || !basicUtils.isValidId(userId)) throw new Error('File not found');
+  if (!fileId) throw new Error('Missing fileId');
+  if (!userId) throw new Error('Missing userId');
 
   const file = await fileUtils.getFile({
     _id: ObjectId(fileId),
@@ -36,36 +23,30 @@ fileQueue.process(async (job) => {
   if (!file) throw new Error('File not found');
 
   const { localPath } = file;
-  const options = {};
   const widths = [500, 250, 100];
 
-  widths.forEach(async (width) => {
-    options.width = width;
-    try {
-      const thumbnail = await imageThumbnail(localPath, options);
-      await fsPromises.writeFile(`${localPath}_${width}`, thumbnail);
-      //   console.log(thumbnail);
-    } catch (err) {
-      console.error(err.message);
-    }
-  });
+  try {
+    await Promise.all(
+      widths.map(async (width) => {
+        const options = { width };
+        const thumbnail = await imageThumbnail(localPath, options);
+        const thumbnailPath = `${localPath}_${width}`;
+        await fsPromises.writeFile(thumbnailPath, thumbnail);
+      })
+    );
+    console.log('Thumbnails created successfully');
+  } catch (err) {
+    console.error('Error creating thumbnails:', err.message);
+  }
 });
 
+// User processing worker
 userQueue.process(async (job) => {
   const { userId } = job.data;
-  // Delete bull keys in redis
-  //   redis-cli keys "bull*" | xargs redis-cli del
 
-  if (!userId) {
-    console.log('Missing userId');
-    throw new Error('Missing userId');
-  }
+  if (!userId) throw new Error('Missing userId');
 
-  if (!basicUtils.isValidId(userId)) throw new Error('User not found');
-
-  const user = await userUtils.getUser({
-    _id: ObjectId(userId),
-  });
+  const user = await userUtils.getUser({ _id: ObjectId(userId) });
 
   if (!user) throw new Error('User not found');
 
